@@ -1,0 +1,28 @@
+# Git ignore for Riemann Hypothesis GPU Miner
+
+# Large binary data files (regenerated automatically)
+Cn.bin
+theta.bin
+
+# Compiled executables
+*.exe
+
+# Runtime output files
+miner_history.log
+checkpoint.json
+checkpoint.json.tmp
+ANOMALY_FOUND.txt
+
+# Old/legacy scripts (kept locally but not in repo)
+miner_v2.py
+miner_orchestrator.py
+prep_phases.py
+riemann_core.py
+riemann_gpu.cu
+riemann_gpu_13.cu
+riemann_gpu_miner.cu
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo

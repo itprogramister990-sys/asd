@@ -1,0 +1,35 @@
+@echo off
+title 🔬 Riemann Hypothesis GPU Miner
+color 0a
+echo.
+echo  ██████╗ ██╗███████╗███╗   ███╗ █████╗ ███╗   ██╗███╗   ██╗
+echo  ██╔══██╗██║██╔════╝████╗ ████║██╔══██╗████╗  ██║████╗  ██║
+echo  ██████╔╝██║█████╗  ██╔████╔██║███████║██╔██╗ ██║██╔██╗ ██║
+echo  ██╔══██╗██║██╔══╝  ██║╚██╔╝██║██╔══██║██║╚██╗██║██║╚██╗██║
+echo  ██║  ██║██║███████╗██║ ╚═╝ ██║██║  ██║██║ ╚████║██║ ╚████║
+echo  ╚═╝  ╚═╝╚═╝╚══════╝╚═╝     ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝╚═╝  ╚═══╝
+echo.
+echo  [GPU Miner] Поиск нулей Римана - Архитектура: 100%% CUDA
+echo  ================================================================
+echo.
+
+echo [1/2] Компиляция C++ CUDA ядра...
+call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1
+nvcc riemann_anchor.cu -o riemann_anchor.exe -O3 --use_fast_math
+
+if %errorlevel% neq 0 (
+    echo [ОШИБКА] Компиляция провалилась! Проверьте CUDA и Visual Studio.
+    pause
+    exit /b
+)
+echo [OK] CUDA ядро скомпилировано!
+echo.
+echo [2/2] Запуск майнера... (Ctrl+C для остановки)
+echo.
+
+:loop
+python anchor_miner.py
+echo.
+echo [!] Майнер остановлен. Перезапуск через 5 секунд...
+timeout /t 5 /nobreak
+goto loop
