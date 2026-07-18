@@ -1,5 +1,5 @@
 @echo off
-title 🔬 Riemann Hypothesis GPU Miner
+title Riemann Hypothesis GPU Miner [FP32 TURBO MODE]
 color 0a
 echo.
 echo  ██████╗ ██╗███████╗███╗   ███╗ █████╗ ███╗   ██╗███╗   ██╗
@@ -9,27 +9,27 @@ echo  ██╔══██╗██║██╔══╝  ██║╚██╔
 echo  ██║  ██║██║███████╗██║ ╚═╝ ██║██║  ██║██║ ╚████║██║ ╚████║
 echo  ╚═╝  ╚═╝╚═╝╚══════╝╚═╝     ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝╚═╝  ╚═══╝
 echo.
-echo  [GPU Miner] Поиск нулей Римана - Архитектура: 100%% CUDA
+echo  [FP32 TURBO] 6x faster than FP64  ~5 sec/block  ~5760 blocks/8h
 echo  ================================================================
 echo.
 
-echo [1/2] Компиляция C++ CUDA ядра...
+echo [1/2] Compiling CUDA FP32 kernel...
 call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvars64.bat" >nul 2>&1
-nvcc riemann_anchor.cu -o riemann_anchor.exe -O3 --use_fast_math
+nvcc -O3 riemann_os.cu -o riemann_os.exe
 
 if %errorlevel% neq 0 (
-    echo [ОШИБКА] Компиляция провалилась! Проверьте CUDA и Visual Studio.
+    echo [ERROR] Compilation failed!
     pause
     exit /b
 )
-echo [OK] CUDA ядро скомпилировано!
+echo [OK] FP32 CUDA kernel compiled!
 echo.
-echo [2/2] Запуск майнера... (Ctrl+C для остановки)
+echo [2/2] Starting FP32 Turbo Miner...
 echo.
 
 :loop
-python anchor_miner.py
+python os_miner.py
 echo.
-echo [!] Майнер остановлен. Перезапуск через 5 секунд...
+echo [!] Miner stopped. Auto-restart in 5s...
 timeout /t 5 /nobreak
 goto loop
