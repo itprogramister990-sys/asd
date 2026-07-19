@@ -30,13 +30,16 @@ def compute_chunk(args):
         val_mod = mpmath.fmod(val, 2 * pi)
         if val_mod < 0:
             val_mod += 2 * pi
-        chunk_data += struct.pack("d", float(val_mod))  # FP64 Cn.bin (ради совместимости)
+        chunk_data += struct.pack("f", float(val_mod))  # FP32 Cn.bin!
     return chunk_data
+
+def theta_raw(t):
+    pi = mpmath.pi
+    return (t / 2) * mpmath.log(t / (2 * pi)) - (t / 2) - pi / 8 + 1 / (48 * t)
 
 def theta_mod2pi(t):
     pi = mpmath.pi
-    raw = (t / 2) * mpmath.log(t / (2 * pi)) - (t / 2) - pi / 8 + 1 / (48 * t)
-    mod = mpmath.fmod(raw, 2 * pi)
+    mod = mpmath.fmod(theta_raw(t), 2 * pi)
     if mod < 0:
         mod += 2 * pi
     return mod
@@ -76,27 +79,35 @@ if __name__ == '__main__':
     t_current = mpmath.mpf(t_current_str)
     N = int(mpmath.floor(mpmath.sqrt(t_anchor / (2 * pi))))
 
-    # Cn.bin: используем тот же что у anchor_miner.py (FP64, совместимо)
-    if os.path.exists(checkpoint_file) and os.path.exists("Cn.bin"):
-        console.print(f"[green][INFO] Anchor Cn.bin found. N={N:,}. Skipping generation.[/green]")
-    else:
-        console.print(f"\n[INFO] ANCHOR GENERATION ({cores} cores)...")
+    def generate_cn_bin(N_val, t_anch_str, cores_count):
+        console.print(f"\n[bold cyan][ANCHOR][/bold cyan] Generating FP32 Cn.bin for t={t_anch_str} ({cores_count} cores)...")
         t0 = time.time()
-        chunk_size = math.ceil(N / cores)
+        chunk_size = math.ceil(N_val / cores_count)
         ranges = []
-        for i in range(cores):
+        for i in range(cores_count):
             sn = i * chunk_size + 1
-            en = min((i + 1) * chunk_size, N)
-            if sn <= N:
-                ranges.append((sn, en, t_anchor_str))
-        with Pool(processes=cores) as pool:
+            en = min((i + 1) * chunk_size, N_val)
+            if sn <= N_val:
+                ranges.append((sn, en, t_anch_str))
+        with Pool(processes=cores_count) as pool:
             results = pool.map(compute_chunk, ranges)
         with open("Cn.bin", "wb") as f:
             for res in results:
                 f.write(res)
         console.print(f"[green][INFO] Anchor done in {time.time()-t0:.1f}s.[/green]")
 
-    console.print(f"[bold yellow][OS-MINER][/bold yellow] FP32 mode | N={N:,} | Target speedup: ~32x vs FP64")
+    # Check valid FP32 Cn.bin
+    cn_valid = False
+    if os.path.exists("Cn.bin") and os.path.exists(checkpoint_file):
+        if os.path.getsize("Cn.bin") == 4 * N:
+            cn_valid = True
+
+    if cn_valid:
+        console.print(f"[green][INFO] Anchor Cn.bin found (FP32). N={N:,}. Skipping generation.[/green]")
+    else:
+        generate_cn_bin(N, t_anchor_str, cores)
+
+    console.print(f"[bold yellow][OS-MINER][/bold yellow] FP32 mode v2 (GPU Theta) | N={N:,} | Target speedup: ~32x vs FP64")
 
     table = Table(show_header=True, header_style="bold cyan", border_style="bright_blue")
     table.add_column("Block",     justify="right",  style="cyan")
@@ -110,18 +121,25 @@ if __name__ == '__main__':
         while True:
             t_block_start = time.time()
 
-            # Theta в FP32 (4 байта вместо 8 = меньше трафик)
-            with open("theta_f32.bin", "wb") as f:
-                for k in range(num_steps):
-                    t_k = t_current + mpmath.mpf(k) * mpmath.mpf(str(step))
-                    th  = theta_mod2pi(t_k)
-                    f.write(struct.pack("f", float(th)))  # <- FP32!
+            # Anchor reset: limit delta_t to ensure cosf() remains highly accurate
+            if (t_current - t_anchor) > 3900:
+                t_anchor = t_current
+                t_anchor_str = str(t_anchor)
+                console.print(f"\n[bold magenta][ANCHOR RESET][/bold magenta] Delta_t > 3900. Regenerating anchor to maintain FP32 precision...")
+                generate_cn_bin(N, t_anchor_str, cores)
+
+            th_base_raw = theta_raw(t_current)
+            th_next_raw = theta_raw(t_current + mpmath.mpf(str(step)))
+            step_theta = float(th_next_raw - th_base_raw)
+            theta_base = float(mpmath.fmod(th_base_raw, 2 * mpmath.pi))
+            if theta_base < 0.0: theta_base += 2.0 * math.pi
 
             expected_rounded = round(float(N_t(t_current + delta_max) - N_t(t_current)))
 
             result = subprocess.run(
                 ["riemann_os.exe",
-                 str(N), str(float(t_anchor)), str(float(t_current))],
+                 str(N), str(float(t_anchor)), str(float(t_current)),
+                 f"{theta_base:.9f}", f"{step_theta:.9f}"],
                 capture_output=True, text=True
             )
             gpu_zeros = -1
