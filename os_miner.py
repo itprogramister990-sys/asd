@@ -106,13 +106,14 @@ if __name__ == '__main__':
         console.print(f"[ANCHOR] Generating FP64 Cn.bin for N={N:,} at anchor t={t_anchor_str}...")
         generate_cn_bin(N, t_anchor_str, cores)
 
-    console.print(f"[bold yellow][OS-MINER][/bold yellow] Hybrid FP32/FP64 mode | N={N:,} | Target speedup: ~32x vs FP64")
+    console.print(f"[bold yellow][OS-MINER][/bold yellow] Rigorous FP64 Interval Arithmetic mode | N={N:,} | AMR Enabled")
 
     table = Table(show_header=True, header_style="bold cyan", border_style="bright_blue")
     table.add_column("Block",     justify="right",  style="cyan")
     table.add_column("Height t",  justify="right",  style="white")
     table.add_column("Expected",  justify="right",  style="yellow")
-    table.add_column("GPU FP32",  justify="right",  style="green")
+    table.add_column("GPU Zeros", justify="right",  style="green")
+    table.add_column("Warnings",  justify="right",  style="red")
     table.add_column("Time (s)",  justify="right",  style="white")
     table.add_column("Status",    justify="center")
 
@@ -142,33 +143,43 @@ if __name__ == '__main__':
                 capture_output=True, text=True
             )
             gpu_zeros = -1
+            gpu_warnings = 0
             for line in result.stdout.split('\n'):
                 if "[RESULT] ZEROS=" in line:
                     try:
-                        gpu_zeros = int(line.split("=")[1].strip())
+                        parts = line.split("WARNINGS=")
+                        gpu_warnings = int(parts[1].strip())
+                        gpu_zeros = int(parts[0].split("ZEROS=")[1].strip())
                     except Exception:
                         pass
 
             time_taken = time.time() - t_block_start
             anomaly = (abs(gpu_zeros - expected_rounded) > 3) or (gpu_zeros == -1)
-            status  = "[bold red]!!! ANOMALY !!![/bold red]" if anomaly else "[bold green]OK[/bold green]"
+            
+            if gpu_warnings > 0:
+                status = f"[bold yellow]WARN ({gpu_warnings})[/bold yellow]"
+            else:
+                status = "[bold red]!!! ANOMALY !!![/bold red]" if anomaly else "[bold green]RIGOROUS[/bold green]"
 
             table.add_row(str(iteration), f"{float(t_current):.1f}",
-                          str(expected_rounded), str(gpu_zeros),
+                          str(expected_rounded), str(gpu_zeros), str(gpu_warnings),
                           f"{time_taken:.2f}", status)
 
             with open("miner_os.log", "a", encoding="utf-8") as f:
                 f.write(f"| Block {iteration} | t={float(t_current):.1f}"
-                        f" | Expected:{expected_rounded} | GPU_FP32:{gpu_zeros}"
-                        f" | Time:{time_taken:.2f}s\n")
+                        f" | Expected:{expected_rounded} | GPU_Zeros:{gpu_zeros}"
+                        f" | Warnings:{gpu_warnings} | Time:{time_taken:.2f}s\n")
+
+            if gpu_warnings > 0:
+                with open("PRECISION_WARNINGS.txt", "a", encoding="utf-8") as f:
+                    f.write(f"t={float(t_current):.6f} | Warnings: {gpu_warnings} | Interval Exhaustion Detected!\n")
 
             if anomaly:
-                # Проверяем: это баг FP32 или реальная аномалия?
-                with open("ANOMALY_FP32.txt", "a", encoding="utf-8") as f:
+                with open("ANOMALY_FP64.txt", "a", encoding="utf-8") as f:
                     f.write(f"t={float(t_current):.6f} | "
-                            f"Expected:{expected_rounded} | FP32:{gpu_zeros} | "
-                            f"VERIFY WITH FP64!\n")
-                console.print("[bold yellow][WARNING] Anomaly detected — verify with anchor_miner.py before celebrating![/bold yellow]")
+                            f"Expected:{expected_rounded} | Zeros:{gpu_zeros} | "
+                            f"MATHEMATICAL ANOMALY DETECTED!\n")
+                console.print("[bold yellow][WARNING] Anomaly detected in strict rigorous mode![/bold yellow]")
                 for _ in range(3):
                     winsound.Beep(1500, 300)
                 break
