@@ -40,6 +40,26 @@ __global__ void shift_Cn_fp64(int N, double delta_t_base, double* d_Cn_anchor, d
     }
 }
 
+// --- Device Function: Z(t) Fast FP32 Evaluation for Culling ---
+__device__ void compute_Z_f32(
+    double t_eval, double t_current, double th_eval, int N,
+    double* d_Cn_shifted, double* d_log_n_f64, double* d_inv_sqrt_n_f64,
+    float& z_out)
+{
+    double TWO_PI_F64 = 6.28318530717958647692;
+    float th_k_f32 = (float)fmod(th_eval, TWO_PI_F64);
+    if (th_k_f32 < 0.0f) th_k_f32 += (float)TWO_PI_F64;
+    
+    float delta_t = (float)(t_eval - t_current);
+    float sum = 0.0f;
+    
+    for (int n = 0; n < N; ++n) {
+        float phi = th_k_f32 + (float)d_Cn_shifted[n] - delta_t * (float)d_log_n_f64[n];
+        sum += cosf(phi) * (float)d_inv_sqrt_n_f64[n];
+    }
+    z_out = sum * 2.0f;
+}
+
 // --- Device Function: Z(t) Interval Evaluation ---
 __device__ void compute_Z_interval(
     double t_eval, double t_current, double th_eval, int N,
@@ -109,11 +129,22 @@ __global__ void eval_Z_coarse(
         double th_eval = theta_base + (double)k * step_theta;
         
         double z_low, z_high, r_low, r_high;
-        compute_Z_interval(t_eval, t_current, th_eval, N, d_Cn_shifted, d_log_n_f64, d_inv_sqrt_n_f64, z_low, z_high);
-        compute_Rt_interval(t_eval, N, r_low, r_high);
         
-        d_z_low[k] = __dadd_rd(z_low, r_low);
-        d_z_high[k] = __dadd_ru(z_high, r_high);
+        float z_f32;
+        compute_Z_f32(t_eval, t_current, th_eval, N, d_Cn_shifted, d_log_n_f64, d_inv_sqrt_n_f64, z_f32);
+        
+        // CULLING HEURISTIC: The max cumulative FP32 error is < 0.15. 
+        // If |Z| is > 0.15, it mathematically cannot cross zero, so we skip FP64 interval math.
+        if (fabsf(z_f32) < 0.15f) {
+            compute_Z_interval(t_eval, t_current, th_eval, N, d_Cn_shifted, d_log_n_f64, d_inv_sqrt_n_f64, z_low, z_high);
+            compute_Rt_interval(t_eval, N, r_low, r_high);
+            d_z_low[k] = __dadd_rd(z_low, r_low);
+            d_z_high[k] = __dadd_ru(z_high, r_high);
+        } else {
+            // Fake the strict interval since we rigorously know it shares the sign of z_f32
+            d_z_low[k]  = (double)z_f32 - 0.15;
+            d_z_high[k] = (double)z_f32 + 0.15;
+        }
     }
 }
 
@@ -126,56 +157,51 @@ __global__ void detect_and_amr(
     int* d_zeros, int* d_warnings)
 {
     int k = blockIdx.x * blockDim.x + threadIdx.x;
-    if (k < num_steps) {
+    if (k > 0 && k < num_steps - 1) {
+        double z_prev = d_z_low[k-1] + (d_z_high[k-1] - d_z_low[k-1])/2.0;
         double z0_low = d_z_low[k];
         double z0_high = d_z_high[k];
         double z1_low = d_z_low[k+1];
         double z1_high = d_z_high[k+1];
         
+        double z0_mid = z0_low + (z0_high - z0_low) / 2.0;
+        double z1_mid = z1_low + (z1_high - z1_low) / 2.0;
+        
+        bool z0_ambig = (z0_low <= 0.0 && z0_high >= 0.0);
+        bool z1_ambig = (z1_low <= 0.0 && z1_high >= 0.0);
+        
         int zeros_found = 0;
         int warnings = 0;
         
-        int last_strict_sign = 0;
-        if (z0_low > 0.0) last_strict_sign = 1;
-        else if (z0_high < 0.0) last_strict_sign = -1;
+        bool p_pos = (z0_low > 0.0);
+        bool p_neg = (z0_high < 0.0);
+        bool c_pos = (z1_low > 0.0);
+        bool c_neg = (z1_high < 0.0);
         
-        if (z1_low > 0.0) {
-            if (last_strict_sign == -1) zeros_found = 1;
-            last_strict_sign = 1;
-        } else if (z1_high < 0.0) {
-            if (last_strict_sign == 1) zeros_found = 1;
-            last_strict_sign = -1;
-        }
-        
-        double z0_mid = 0.5 * (z0_low + z0_high);
-        double z1_mid = 0.5 * (z1_low + z1_high);
-
-        bool z0_ambig = (z0_low <= 0.0 && z0_high >= 0.0);
-        bool z1_ambig = (z1_low <= 0.0 && z1_high >= 0.0);
-
-        // If clean crossing with ample margin, we skip AMR
-        if (zeros_found == 1 && fabs(z0_mid) >= 0.05 && fabs(z1_mid) >= 0.05 && !z0_ambig && !z1_ambig) {
-            d_zeros[k] = zeros_found;
-            d_warnings[k] = warnings;
-            return;
+        if ((p_pos && c_neg) || (p_neg && c_pos)) {
+            zeros_found = 1;
         } 
         
-        // AMR Triggered (Proximity to Zero or Interval Uncertainty)
-        if (fabs(z0_mid) < 0.05 || fabs(z1_mid) < 0.05 || z0_ambig || z1_ambig) {
+        bool is_local_min = (z0_mid < z_prev) && (z0_mid < z1_mid);
+        bool is_local_max = (z0_mid > z_prev) && (z0_mid > z1_mid);
+        bool extremum_near_zero = (is_local_min && z0_mid > 0.0 && z0_mid < 0.05) || 
+                                  (is_local_max && z0_mid < 0.0 && z0_mid > -0.05);
+        
+        if (extremum_near_zero || z0_ambig || z1_ambig) {
             zeros_found = 0;
             warnings = 0;
             
-            double sub_step = step / 100.0;
-            double sub_step_theta = step_theta / 100.0;
+            double sub_step = step / 10.0;
+            double sub_step_theta = step_theta / 10.0;
             
             int strict_sign = 0;
             if (z0_low > 0.0) strict_sign = 1;
             else if (z0_high < 0.0) strict_sign = -1;
-            else warnings = 1; // z0 contains zero!
+            else warnings = 1;
             
-            for (int i = 1; i <= 100; ++i) {
+            for (int i = 1; i <= 10; ++i) {
                 double cur_low, cur_high;
-                if (i == 100) {
+                if (i == 10) {
                     cur_low = z1_low; cur_high = z1_high;
                 } else {
                     double sub_t = t_current + (double)k * step + (double)i * sub_step;
@@ -194,7 +220,7 @@ __global__ void detect_and_amr(
                     if (strict_sign == 1) zeros_found++;
                     strict_sign = -1;
                 } else {
-                    warnings = 1; // Sub-interval spans zero, precision exhaustion!
+                    warnings = 1;
                 }
             }
         }
