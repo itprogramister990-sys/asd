@@ -157,70 +157,77 @@ __global__ void detect_and_amr(
     int* d_zeros, int* d_warnings)
 {
     int k = blockIdx.x * blockDim.x + threadIdx.x;
-    if (k > 0 && k < num_steps - 1) {
-        double z_prev = d_z_low[k-1] + (d_z_high[k-1] - d_z_low[k-1])/2.0;
-        double z0_low = d_z_low[k];
-        double z0_high = d_z_high[k];
-        double z1_low = d_z_low[k+1];
-        double z1_high = d_z_high[k+1];
-        
-        double z0_mid = z0_low + (z0_high - z0_low) / 2.0;
-        double z1_mid = z1_low + (z1_high - z1_low) / 2.0;
-        
-        bool z0_ambig = (z0_low <= 0.0 && z0_high >= 0.0);
-        bool z1_ambig = (z1_low <= 0.0 && z1_high >= 0.0);
-        
+    if (k < num_steps) {
         int zeros_found = 0;
         int warnings = 0;
         
-        bool p_pos = (z0_low > 0.0);
-        bool p_neg = (z0_high < 0.0);
-        bool c_pos = (z1_low > 0.0);
-        bool c_neg = (z1_high < 0.0);
-        
-        if ((p_pos && c_neg) || (p_neg && c_pos)) {
-            zeros_found = 1;
-        } 
-        
-        bool is_local_min = (z0_mid < z_prev) && (z0_mid < z1_mid);
-        bool is_local_max = (z0_mid > z_prev) && (z0_mid > z1_mid);
-        bool extremum_near_zero = (is_local_min && z0_mid > 0.0 && z0_mid < 0.05) || 
-                                  (is_local_max && z0_mid < 0.0 && z0_mid > -0.05);
-        
-        if (extremum_near_zero || z0_ambig || z1_ambig) {
-            zeros_found = 0;
-            warnings = 0;
+        if (k < num_steps - 1) {
+            double z0_low = d_z_low[k];
+            double z0_high = d_z_high[k];
+            double z1_low = d_z_low[k+1];
+            double z1_high = d_z_high[k+1];
             
-            double sub_step = step / 10.0;
-            double sub_step_theta = step_theta / 10.0;
+            double z0_mid = z0_low + (z0_high - z0_low) / 2.0;
+            double z1_mid = z1_low + (z1_high - z1_low) / 2.0;
             
-            int strict_sign = 0;
-            if (z0_low > 0.0) strict_sign = 1;
-            else if (z0_high < 0.0) strict_sign = -1;
-            else warnings = 1;
+            bool z0_ambig = (z0_low <= 0.0 && z0_high >= 0.0);
+            bool z1_ambig = (z1_low <= 0.0 && z1_high >= 0.0);
             
-            for (int i = 1; i <= 10; ++i) {
-                double cur_low, cur_high;
-                if (i == 10) {
-                    cur_low = z1_low; cur_high = z1_high;
-                } else {
-                    double sub_t = t_current + (double)k * step + (double)i * sub_step;
-                    double sub_th = theta_base + (double)k * step_theta + (double)i * sub_step_theta;
-                    double r_low, r_high;
-                    compute_Z_interval(sub_t, t_current, sub_th, N, d_Cn_shifted, d_log_n_f64, d_inv_sqrt_n_f64, cur_low, cur_high);
-                    compute_Rt_interval(sub_t, N, r_low, r_high);
-                    cur_low = __dadd_rd(cur_low, r_low);
-                    cur_high = __dadd_ru(cur_high, r_high);
-                }
+            bool p_pos = (z0_low > 0.0);
+            bool p_neg = (z0_high < 0.0);
+            bool c_pos = (z1_low > 0.0);
+            bool c_neg = (z1_high < 0.0);
+            
+            if ((p_pos && c_neg) || (p_neg && c_pos)) {
+                zeros_found = 1;
+            } 
+            
+            bool is_local_min = false;
+            bool is_local_max = false;
+            if (k > 0) {
+                double z_prev = d_z_low[k-1] + (d_z_high[k-1] - d_z_low[k-1])/2.0;
+                is_local_min = (z0_mid < z_prev) && (z0_mid < z1_mid);
+                is_local_max = (z0_mid > z_prev) && (z0_mid > z1_mid);
+            }
+            
+            bool extremum_near_zero = (is_local_min && z0_mid > 0.0 && z0_mid < 0.05) || 
+                                      (is_local_max && z0_mid < 0.0 && z0_mid > -0.05);
+            
+            if (extremum_near_zero || z0_ambig || z1_ambig) {
+                zeros_found = 0;
+                warnings = 0;
                 
-                if (cur_low > 0.0) {
-                    if (strict_sign == -1) zeros_found++;
-                    strict_sign = 1;
-                } else if (cur_high < 0.0) {
-                    if (strict_sign == 1) zeros_found++;
-                    strict_sign = -1;
-                } else {
-                    warnings = 1;
+                double sub_step = step / 10.0;
+                double sub_step_theta = step_theta / 10.0;
+                
+                int strict_sign = 0;
+                if (z0_low > 0.0) strict_sign = 1;
+                else if (z0_high < 0.0) strict_sign = -1;
+                else warnings = 1;
+                
+                for (int i = 1; i <= 10; ++i) {
+                    double cur_low, cur_high;
+                    if (i == 10) {
+                        cur_low = z1_low; cur_high = z1_high;
+                    } else {
+                        double sub_t = t_current + (double)k * step + (double)i * sub_step;
+                        double sub_th = theta_base + (double)k * step_theta + (double)i * sub_step_theta;
+                        double r_low, r_high;
+                        compute_Z_interval(sub_t, t_current, sub_th, N, d_Cn_shifted, d_log_n_f64, d_inv_sqrt_n_f64, cur_low, cur_high);
+                        compute_Rt_interval(sub_t, N, r_low, r_high);
+                        cur_low = __dadd_rd(cur_low, r_low);
+                        cur_high = __dadd_ru(cur_high, r_high);
+                    }
+                    
+                    if (cur_low > 0.0) {
+                        if (strict_sign == -1) zeros_found++;
+                        strict_sign = 1;
+                    } else if (cur_high < 0.0) {
+                        if (strict_sign == 1) zeros_found++;
+                        strict_sign = -1;
+                    } else {
+                        warnings = 1;
+                    }
                 }
             }
         }
