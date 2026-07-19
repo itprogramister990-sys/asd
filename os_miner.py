@@ -30,7 +30,7 @@ def compute_chunk(args):
         val_mod = mpmath.fmod(val, 2 * pi)
         if val_mod < 0:
             val_mod += 2 * pi
-        chunk_data += struct.pack("f", float(val_mod))  # FP32 Cn.bin!
+        chunk_data += struct.pack("d", float(val_mod))
     return chunk_data
 
 def theta_raw(t):
@@ -96,18 +96,17 @@ if __name__ == '__main__':
                 f.write(res)
         console.print(f"[green][INFO] Anchor done in {time.time()-t0:.1f}s.[/green]")
 
-    # Check valid FP32 Cn.bin
-    cn_valid = False
-    if os.path.exists("Cn.bin") and os.path.exists(checkpoint_file):
-        if os.path.getsize("Cn.bin") == 4 * N:
-            cn_valid = True
-
-    if cn_valid:
-        console.print(f"[green][INFO] Anchor Cn.bin found (FP32). N={N:,}. Skipping generation.[/green]")
+    if os.path.exists("Cn.bin"):
+        if os.path.getsize("Cn.bin") == N * 8:
+            console.print(f"[green][INFO] Anchor Cn.bin found (FP64). N={N:,}. Skipping generation.[/green]")
+        else:
+            console.print(f"[ANCHOR] Generating FP64 Cn.bin for N={N:,} at anchor t={t_anchor_str}...")
+            generate_cn_bin(N, t_anchor_str, cores)
     else:
+        console.print(f"[ANCHOR] Generating FP64 Cn.bin for N={N:,} at anchor t={t_anchor_str}...")
         generate_cn_bin(N, t_anchor_str, cores)
 
-    console.print(f"[bold yellow][OS-MINER][/bold yellow] FP32 mode v2 (GPU Theta) | N={N:,} | Target speedup: ~32x vs FP64")
+    console.print(f"[bold yellow][OS-MINER][/bold yellow] Hybrid FP32/FP64 mode | N={N:,} | Target speedup: ~32x vs FP64")
 
     table = Table(show_header=True, header_style="bold cyan", border_style="bright_blue")
     table.add_column("Block",     justify="right",  style="cyan")
@@ -139,7 +138,7 @@ if __name__ == '__main__':
             result = subprocess.run(
                 ["riemann_os.exe",
                  str(N), str(float(t_anchor)), str(float(t_current)),
-                 f"{theta_base:.9f}", f"{step_theta:.9f}"],
+                 f"{theta_base:.15f}", f"{step_theta:.15f}"],
                 capture_output=True, text=True
             )
             gpu_zeros = -1
